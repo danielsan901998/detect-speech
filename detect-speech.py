@@ -23,9 +23,9 @@ def format_timestamp(
         f"{hours_marker}{minutes:02d}:{seconds:02d}{decimal_marker}{milliseconds:03d}"
     )
 
-def find_speech_timestamps(audio_path: str):
+def find_speech_timestamps(audio_path: str, min_duration_s: float):
     """
-    Detects speech activity in an audio file and prints the timestamps of speech segments.
+    Detects non-speech segments longer than 0.4 seconds in an audio file and prints their timestamps.
     """
     # torch.hub.load can be slow, so let the user know what's happening
     #print("Loading Silero VAD model, this may take a moment...", file=sys.stderr)
@@ -35,6 +35,7 @@ def find_speech_timestamps(audio_path: str):
         model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad',
                                   model='silero_vad',
                                   force_reload=False,
+                                  verbose=False,
                                   onnx=False)
     except Exception as e:
         print(f"Failed to load Silero VAD model: {e}", file=sys.stderr)
@@ -60,20 +61,56 @@ def find_speech_timestamps(audio_path: str):
     # get_speech_timestamps returns a list of dicts with 'start' and 'end' samples
     speech_timestamps = get_speech_timestamps(wav, model, sampling_rate=SAMPLING_RATE)
 
-    if not speech_timestamps:
-        print("No speech detected in the audio.", file=sys.stderr)
+    total_samples = len(wav)
+    min_duration_samples = SAMPLING_RATE * min_duration_s
+
+    non_speech_segments = []
+    
+    # Start from the beginning of the audio
+    current_pos = 0
+
+    if speech_timestamps:
+        for segment in speech_timestamps:
+            start_speech = segment['start']
+            end_speech = segment['end']
+            
+            # The gap between current_pos and start_speech is a non-speech segment
+            if start_speech - current_pos > min_duration_samples:
+                non_speech_segments.append({'start': current_pos, 'end': start_speech})
+            
+            current_pos = end_speech
+    
+    # The rest of the audio from the last speech end to total_samples
+    if total_samples - current_pos > min_duration_samples:
+        non_speech_segments.append({'start': current_pos, 'end': total_samples})
+
+    if not non_speech_segments:
+        print(f"No non-speech segments longer than {min_duration_s}s found.", file=sys.stderr)
         return
 
-    print("Speech segments found:")
-    for i, segment in enumerate(speech_timestamps):
+    print(f"Non-speech segments longer than {min_duration_s}s found:")
+    for i, segment in enumerate(non_speech_segments):
         start_time = segment['start'] / SAMPLING_RATE
         end_time = segment['end'] / SAMPLING_RATE
         print(f"  {i+1}: [{format_timestamp(start_time)}] --> [{format_timestamp(end_time)}]")
 
 if __name__ == "__main__":
+    min_non_speech_duration_s = 1.0 # Default value
+
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <audio_file>", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} <audio_file> [min_non_speech_duration_s]", file=sys.stderr)
+        print(f"  min_non_speech_duration_s (optional): Minimum duration in seconds for non-speech segments to be reported. Default is {min_non_speech_duration_s}s.", file=sys.stderr)
         sys.exit(1)
 
     audio_file = sys.argv[1]
-    find_speech_timestamps(audio_file)
+    
+    if len(sys.argv) >= 3:
+        try:
+            min_non_speech_duration_s = float(sys.argv[2])
+            if min_non_speech_duration_s < 0:
+                raise ValueError("Duration cannot be negative.")
+        except ValueError:
+            print(f"Error: Invalid duration '{sys.argv[2]}'. Please provide a positive number for min_non_speech_duration_s.", file=sys.stderr)
+            sys.exit(1)
+
+    find_speech_timestamps(audio_file, min_non_speech_duration_s)
