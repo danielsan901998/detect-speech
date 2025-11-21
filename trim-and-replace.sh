@@ -1,16 +1,26 @@
 #!/bin/bash
 
+TRIM_START_ONLY_FLAG=""
+INPUT_FILE=""
+
+for arg in "$@"; do
+  if [ "$arg" == "--trim-start-only" ] || [ "$arg" == "-s" ]; then
+    TRIM_START_ONLY_FLAG="--trim-start-only"
+  else
+    INPUT_FILE="$arg"
+  fi
+done
+
 # Check if a file path is provided as an argument
-if [ -z "$1" ]; then
-  echo "Usage: $0 <audio_file>"
+if [ -z "$INPUT_FILE" ]; then
+  echo "Usage: $0 [-s|--trim-start-only] <audio_file>"
   exit 1
 fi
 
-INPUT_FILE="$1"
 OUTPUT_FILE="/tmp/trim-output.opus"
 
-# Run the Python script
-/home/daniel/programas/detect-speech/detect-speech.py "$INPUT_FILE"
+# Run the Python script with the conditional flag
+/home/daniel/programas/detect-speech/detect-speech.py "$INPUT_FILE" $TRIM_START_ONLY_FLAG
 
 # Check if the output file was created
 if [ -f "$OUTPUT_FILE" ]; then
