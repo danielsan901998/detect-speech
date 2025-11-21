@@ -1,6 +1,8 @@
 #!/home/daniel/.venvs/detect-speech/bin/python3
 import sys
-from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
+from pathlib import Path
+import argparse
+from silero_vad import VADIterator, load_silero_vad, read_audio
 import subprocess
 
 def format_timestamp(
@@ -23,14 +25,16 @@ def format_timestamp(
         f"{hours_marker}{minutes:02d}:{seconds:02d}{decimal_marker}{milliseconds:03d}"
     )
 
-def trim_audio_based_on_speech(audio_path: str, output_path: str):
+def trim_audio_based_on_speech(
+    audio_path: str, output_path: str, trim_start_only: bool = False
+):
     """
     Detects speech in an audio file, trims silence from the beginning and end,
     and saves the result to a new file using ffmpeg.
     """
     # torch.hub.load can be slow, so let the user know what's happening
-    #print("Loading Silero VAD model, this may take a moment...", file=sys.stderr)
-    
+    # print("Loading Silero VAD model, this may take a moment...", file=sys.stderr)
+
     try:
         model = load_silero_vad()
     except Exception as e:
@@ -39,41 +43,91 @@ def trim_audio_based_on_speech(audio_path: str, output_path: str):
 
     # Silero VAD expects 16kHz mono audio
     SAMPLING_RATE = 16000
-    
+
     try:
         # read_audio function from utils resamples and converts to mono
         wav = read_audio(audio_path, sampling_rate=SAMPLING_RATE)
     except Exception as e:
         print(f"Failed to read audio file {audio_path}: {e}", file=sys.stderr)
         sys.exit(1)
-    
-    # get_speech_timestamps returns a list of dicts with 'start' and 'end' samples
-    speech_timestamps = get_speech_timestamps(wav, model, sampling_rate=SAMPLING_RATE)
 
-    if not speech_timestamps:
+    vad_iterator = VADIterator(model)
+
+    start_sample = None
+    end_sample = None
+
+    window_size_samples = 512
+
+    if trim_start_only:
+        for i in range(0, len(wav), window_size_samples):
+            chunk = wav[i : i + window_size_samples]
+            if len(chunk) < window_size_samples:
+                break
+            speech_dict = vad_iterator(chunk)
+            if speech_dict and "start" in speech_dict:
+                start_sample = speech_dict["start"]
+                break  # Found start, exit loop
+    else:
+        speeches = []
+        current_speech = {}
+
+        # Based on the Silero VAD example, 512 samples is a good window size for 16kHz audio
+        for i in range(0, len(wav), window_size_samples):
+            chunk = wav[i : i + window_size_samples]
+            if len(chunk) < window_size_samples:
+                break
+            speech_dict = vad_iterator(chunk)
+            if speech_dict:
+                if "start" in speech_dict:
+                    current_speech["start"] = speech_dict["start"]
+                elif "end" in speech_dict and "start" in current_speech:
+                    current_speech["end"] = speech_dict["end"]
+                    speeches.append(current_speech)
+                    current_speech = {}
+
+        # If the audio ends while speech is still detected, handle the last segment
+        if current_speech and "start" in current_speech:
+            current_speech["end"] = len(wav)
+            speeches.append(current_speech)
+
+        if speeches:
+            start_sample = speeches[0]["start"]
+            end_sample = speeches[-1]["end"]
+
+    vad_iterator.reset_states()
+
+    if start_sample is None:
         print("No speech detected. Not creating an output file.", file=sys.stderr)
         return
 
-    start_sample = speech_timestamps[0]['start']
-    end_sample = speech_timestamps[-1]['end']
-    
     start_time = start_sample / SAMPLING_RATE
-    end_time = end_sample / SAMPLING_RATE
-
-    print(f"Detected speech from {format_timestamp(start_time)} to {format_timestamp(end_time)}.", file=sys.stderr)
-    print(f"Trimming audio and saving to {output_path}...", file=sys.stderr)
 
     command = [
-        'ffmpeg',
-        '-hide_banner', '-nostdin',
-        '-i', audio_path,
-        '-ss', str(start_time),
-        '-to', str(end_time),
-        '-c', 'copy',
-        '-y', # Overwrite output file
-        output_path
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-i",
+        str(audio_path),
+        "-ss",
+        str(start_time),
     ]
-    
+
+    if end_sample is not None:
+        end_time = end_sample / SAMPLING_RATE
+        command.extend(["-to", str(end_time)])
+        print(
+            f"Detected speech from {format_timestamp(start_time)} to {format_timestamp(end_time)}.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"Detected speech from {format_timestamp(start_time)}.", file=sys.stderr
+        )
+
+    command.extend(["-c", "copy", "-y", str(output_path)])
+
+    print(f"Trimming audio and saving to {output_path}...", file=sys.stderr)
+
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True)
         print(f"Successfully created {output_path}.", file=sys.stderr)
@@ -96,11 +150,23 @@ def trim_audio_based_on_speech(audio_path: str, output_path: str):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <audio_file>", file=sys.stderr)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Detects speech in an audio file and trims silence."
+    )
+    parser.add_argument("audio_file", type=Path, help="Path to the input audio file.")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("/tmp/trim-output.opus"),
+        help="Path to the output audio file (default: /tmp/trim-output.opus).",
+    )
+    parser.add_argument(
+        "--trim-start-only",
+        action="store_true",
+        help="Only trim silence from the beginning of the audio.",
+    )
+    args = parser.parse_args()
 
-    audio_file = sys.argv[1]
-    output_file = "/tmp/trim-output.opus"
-    
-    trim_audio_based_on_speech(audio_file, output_file)
+    trim_audio_based_on_speech(
+        args.audio_file, args.output, trim_start_only=args.trim_start_only
+    )
