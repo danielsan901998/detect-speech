@@ -101,6 +101,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     audio_file = sys.argv[1]
-    output_file = "output.opus"
+    output_file = "/tmp/trim-output.opus"
     
     trim_audio_based_on_speech(audio_file, output_file)
