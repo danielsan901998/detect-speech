@@ -30,6 +30,34 @@ def format_timestamp(
     )
 
 
+def get_resampled_audio_chunk(
+    decoder: AudioDecoder,
+    resampler: torchaudio.transforms.Resample | None,
+    start_time_seconds: float,
+    end_time_seconds: float,
+    vad_sampling_rate: int,
+) -> torch.Tensor:
+    """
+    Extracts an audio chunk, handles multi-channel audio, resamples it to the
+    VAD_SAMPLING_RATE, and squeezes the tensor.
+    """
+    samples_in_chunk_obj = decoder.get_samples_played_in_range(
+        start_time_seconds, end_time_seconds
+    )
+    wav_chunk_original_sr = samples_in_chunk_obj.data
+
+    # Ensure mono (mean across channels)
+    if wav_chunk_original_sr.ndim > 1 and wav_chunk_original_sr.size(0) > 1:
+        wav_chunk_original_sr = wav_chunk_original_sr.mean(dim=0, keepdim=True)
+
+    # Resample to VAD_SAMPLING_RATE
+    if resampler:
+        wav_chunk_vad_sr = resampler(wav_chunk_original_sr)
+    else:
+        wav_chunk_vad_sr = wav_chunk_original_sr
+    return wav_chunk_vad_sr.squeeze(0)  # Remove channel dimension
+
+
 def trim_audio_based_on_speech(
     audio_path: str,
     output_path: str,
@@ -75,20 +103,10 @@ def trim_audio_based_on_speech(
         while current_offset_seconds < total_duration_seconds:
             chunk_end_for_request = min(current_offset_seconds + chunk_processing_size_seconds, total_duration_seconds)
             
-            # Get samples from original audio at its sample rate
-            samples_in_chunk_obj = decoder.get_samples_played_in_range(current_offset_seconds, chunk_end_for_request)
-            wav_chunk_original_sr = samples_in_chunk_obj.data
-            
-            # Ensure mono (mean across channels)
-            if wav_chunk_original_sr.ndim > 1 and wav_chunk_original_sr.size(0) > 1:
-                wav_chunk_original_sr = wav_chunk_original_sr.mean(dim=0, keepdim=True)
-            
-            # Resample to VAD_SAMPLING_RATE
-            if resampler:
-                wav_chunk_vad_sr = resampler(wav_chunk_original_sr)
-            else:
-                wav_chunk_vad_sr = wav_chunk_original_sr
-            wav_chunk_vad_sr = wav_chunk_vad_sr.squeeze(0) # Remove channel dimension
+            # Get and process samples for the current chunk
+            wav_chunk_vad_sr = get_resampled_audio_chunk(
+                decoder, resampler, current_offset_seconds, chunk_end_for_request, VAD_SAMPLING_RATE
+            )
 
             # Iterate through VAD windows in this chunk
             for i in range(0, len(wav_chunk_vad_sr), VAD_WINDOW_SIZE_SAMPLES):
@@ -123,17 +141,9 @@ def trim_audio_based_on_speech(
         while current_offset_seconds > 0:
             chunk_start_for_request = max(0.0, current_offset_seconds - chunk_processing_size_seconds)
             
-            samples_in_chunk_obj = decoder.get_samples_played_in_range(chunk_start_for_request, current_offset_seconds)
-            wav_chunk_original_sr = samples_in_chunk_obj.data
-
-            if wav_chunk_original_sr.ndim > 1 and wav_chunk_original_sr.size(0) > 1:
-                wav_chunk_original_sr = wav_chunk_original_sr.mean(dim=0, keepdim=True)
-            
-            if resampler:
-                wav_chunk_vad_sr = resampler(wav_chunk_original_sr)
-            else:
-                wav_chunk_vad_sr = wav_chunk_original_sr
-            wav_chunk_vad_sr = wav_chunk_vad_sr.squeeze(0)
+            wav_chunk_vad_sr = get_resampled_audio_chunk(
+                decoder, resampler, chunk_start_for_request, current_offset_seconds, VAD_SAMPLING_RATE
+            )
 
             last_speech_offset_in_chunk_vad_sr = None
             is_speaking_in_chunk = False
