@@ -2,8 +2,10 @@
 import sys
 from pathlib import Path
 import argparse
-from silero_vad import VADIterator, load_silero_vad, read_audio
+from silero_vad import VADIterator, load_silero_vad
 import subprocess
+import torchaudio
+from torchcodec.decoders import AudioDecoder
 
 
 def format_timestamp(
@@ -50,11 +52,20 @@ def trim_audio_based_on_speech(
     SAMPLING_RATE = 16000
 
     try:
-        # read_audio function from utils resamples and converts to mono
-        wav = read_audio(audio_path, sampling_rate=SAMPLING_RATE)
+        samples = AudioDecoder(audio_path).get_all_samples()
+        wav = samples.data
+        sr = samples.sample_rate
     except Exception as e:
         print(f"Failed to read audio file {audio_path}: {e}", file=sys.stderr)
         sys.exit(1)
+
+    if wav.ndim > 1 and wav.size(0) > 1:
+        wav = wav.mean(dim=0, keepdim=True)
+
+    if sr != SAMPLING_RATE:
+        wav = torchaudio.transforms.Resample(sr, SAMPLING_RATE)(wav)
+
+    wav = wav.squeeze(0)
 
     vad_iterator = VADIterator(model)
 
