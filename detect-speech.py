@@ -5,6 +5,7 @@ import argparse
 from silero_vad import VADIterator, load_silero_vad, read_audio
 import subprocess
 
+
 def format_timestamp(
     seconds: float, always_include_hours: bool = False, decimal_marker: str = "."
 ):
@@ -25,8 +26,12 @@ def format_timestamp(
         f"{hours_marker}{minutes:02d}:{seconds:02d}{decimal_marker}{milliseconds:03d}"
     )
 
+
 def trim_audio_based_on_speech(
-    audio_path: str, output_path: str, trim_start_only: bool = False
+    audio_path: str,
+    output_path: str,
+    trim_start: bool = True,
+    trim_end: bool = True,
 ):
     """
     Detects speech in an audio file, trims silence from the beginning and end,
@@ -53,54 +58,82 @@ def trim_audio_based_on_speech(
 
     vad_iterator = VADIterator(model)
 
-    start_sample = None
-    end_sample = None
-
     window_size_samples = 512
+    final_start_sample = 0
+    final_end_sample = len(wav)
 
-    if trim_start_only:
+    if trim_start:  # trim start
+        found_start_speech = False
         for i in range(0, len(wav), window_size_samples):
             chunk = wav[i : i + window_size_samples]
             if len(chunk) < window_size_samples:
                 break
             speech_dict = vad_iterator(chunk)
             if speech_dict and "start" in speech_dict:
-                start_sample = speech_dict["start"]
-                break  # Found start, exit loop
-    else:
-        speeches = []
-        current_speech = {}
-
-        # Based on the Silero VAD example, 512 samples is a good window size for 16kHz audio
-        for i in range(0, len(wav), window_size_samples):
-            chunk = wav[i : i + window_size_samples]
-            if len(chunk) < window_size_samples:
+                final_start_sample = max(0,speech_dict["start"]-window_size_samples)
+                found_start_speech = True
                 break
-            speech_dict = vad_iterator(chunk)
-            if speech_dict:
-                if "start" in speech_dict:
-                    current_speech["start"] = speech_dict["start"]
-                elif "end" in speech_dict and "start" in current_speech:
-                    current_speech["end"] = speech_dict["end"]
-                    speeches.append(current_speech)
-                    current_speech = {}
+        if not found_start_speech:
+            print(
+                "No speech detected at the start. Not creating an output file.",
+                file=sys.stderr,
+            )
+            return
+    if trim_end:  # trim end
+        # Iterate backwards from the end of the file in 1s chunks
+        # usage: range(start, stop, step)
+        seek_step_samples = int(1 * SAMPLING_RATE)
+        audio_len = len(wav)
+        found_end_speech = False
+        for chunk_start in range(
+            max(0, audio_len - seek_step_samples),
+            -seek_step_samples,
+            -seek_step_samples,
+        ):
+            # Handle the final (first in time) chunk which might be shorter
+            actual_start = max(0, chunk_start)
+            actual_end = min(audio_len, chunk_start + seek_step_samples)
 
-        # If the audio ends while speech is still detected, handle the last segment
-        if current_speech and "start" in current_speech:
-            current_speech["end"] = len(wav)
-            speeches.append(current_speech)
+            chunk = wav[actual_start:actual_end]
+            vad_iterator.reset_states()  # Crucial: Reset for each new chunk
 
-        if speeches:
-            start_sample = speeches[0]["start"]
-            end_sample = speeches[-1]["end"]
+            last_speech_in_chunk = None
+            is_speaking = False
 
-    vad_iterator.reset_states()
+            # Scan this chunk FORWARD (standard VAD usage)
+            for i in range(0, len(chunk), window_size_samples):
+                window = chunk[i : i + window_size_samples]
+                if len(window) < window_size_samples:
+                    break
 
-    if start_sample is None:
-        print("No speech detected. Not creating an output file.", file=sys.stderr)
-        return
+                speech_dict = vad_iterator(window)
 
-    start_time = start_sample / SAMPLING_RATE
+                # Track the latest speech timestamp found
+                if speech_dict:
+                    if "start" in speech_dict:
+                        is_speaking = True
+                    if "end" in speech_dict:
+                        is_speaking = False
+                        last_speech_in_chunk = i + speech_dict["end"]
+
+            # If the chunk ends while someone is still speaking, the "end" is the chunk boundary
+            if is_speaking:
+                last_speech_in_chunk = len(chunk)
+
+            # If we found speech in this chunk, we are done!
+            if last_speech_in_chunk is not None:
+                final_end_sample = actual_start + last_speech_in_chunk
+                found_end_speech = True
+                break
+
+        if not found_end_speech:
+            print(
+                "No speech detected at the end. Not creating an output file.",
+                file=sys.stderr,
+            )
+            return
+
+    start_time = final_start_sample / SAMPLING_RATE
 
     command = [
         "ffmpeg",
@@ -112,17 +145,15 @@ def trim_audio_based_on_speech(
         str(start_time),
     ]
 
-    if end_sample is not None:
-        end_time = end_sample / SAMPLING_RATE
+    if final_end_sample < len(wav):  # Only add -to if end is actually trimmed
+        end_time = final_end_sample / SAMPLING_RATE
         command.extend(["-to", str(end_time)])
         print(
             f"Detected speech from {format_timestamp(start_time)} to {format_timestamp(end_time)}.",
             file=sys.stderr,
         )
-    else:
-        print(
-            f"Detected speech from {format_timestamp(start_time)}.", file=sys.stderr
-        )
+    else:  # Only start is trimmed or no trimming at all
+        print(f"Detected speech from {format_timestamp(start_time)}.", file=sys.stderr)
 
     command.extend(["-c", "copy", "-y", str(output_path)])
 
@@ -161,12 +192,24 @@ if __name__ == "__main__":
         help="Path to the output audio file (default: /tmp/trim-output.opus).",
     )
     parser.add_argument(
-        "--trim-start-only",
+        "--trim-start",
         action="store_true",
-        help="Only trim silence from the beginning of the audio.",
+        help="Enable trimming silence from the beginning of the audio. By default, both start and end are trimmed. If only --trim-start is specified, trimming from the end will be disabled.",
+    )
+    parser.add_argument(
+        "--trim-end",
+        action="store_true",
+        help="Enable trimming silence from the end of the audio. By default, both start and end are trimmed. If only --trim-end is specified, trimming from the start will be disabled.",
     )
     args = parser.parse_args()
 
+    # Logic to handle default True and specific overrides
+    call_trim_start = args.trim_start or (not args.trim_start and not args.trim_end)
+    call_trim_end = args.trim_end or (not args.trim_start and not args.trim_end)
+
     trim_audio_based_on_speech(
-        args.audio_file, args.output, trim_start_only=args.trim_start_only
+        args.audio_file,
+        args.output,
+        trim_start=call_trim_start,
+        trim_end=call_trim_end,
     )
