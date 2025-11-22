@@ -17,10 +17,13 @@ if [ -z "$INPUT_FILE" ]; then
   exit 1
 fi
 
-OUTPUT_FILE="/tmp/trim-output.opus"
+OUTPUT_FILE=$(mktemp --suffix=".opus")
+
+# Trap to ensure the temporary file is removed on exit
+trap "rm -f \"$OUTPUT_FILE\"" EXIT
 
 # Run the Python script with the conditional flag
-/home/daniel/programas/detect-speech/detect-speech.py "$INPUT_FILE" $TRIM_START_ONLY_FLAG
+/home/daniel/programas/detect-speech/detect-speech.py "$INPUT_FILE" $TRIM_START_ONLY_FLAG --output "$OUTPUT_FILE"
 
 # Check if the output file was created
 if [ -f "$OUTPUT_FILE" ]; then
