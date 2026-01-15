@@ -1,6 +1,6 @@
 CXX = g++
 CXXFLAGS = -O3 -Iinclude -Isrc -DWHISPER_FFMPEG
-LDFLAGS = -L/usr/local/lib -lwhisper -lggml -lpthread -ldl -lm -lavcodec -lavformat -lavutil -lswresample
+LDFLAGS = -lwhisper -lggml -lpthread -ldl -lm -lavcodec -lavformat -lavutil -lswresample
 
 OBJ_DIR = obj
 SRC_DIR = src

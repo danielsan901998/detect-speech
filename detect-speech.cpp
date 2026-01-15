@@ -10,6 +10,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <unistd.h>
+#include <algorithm>
 
 void whisper_log_callback(ggml_log_level level, const char * text, void * user_data) {
     (void)user_data;
@@ -113,10 +114,14 @@ int main(int argc, char ** argv) {
     if (call_trim_start) {
         // whisper_vad_segments_get_segment_t0 returns time in centiseconds (10ms units)
         final_start_seconds = whisper_vad_segments_get_segment_t0(segments, 0) * 0.01f;
+        // Subtract 1 second to avoid skipping the first word
+        final_start_seconds = std::max(0.0f, final_start_seconds - 0.5f);
     }
 
     if (call_trim_end) {
         final_end_seconds = whisper_vad_segments_get_segment_t1(segments, n_vad_segments - 1) * 0.01f;
+        // Add 1 second to avoid skipping the last word
+        final_end_seconds = std::min(total_duration_seconds, final_end_seconds + 0.5f);
     }
 
     whisper_vad_free_segments(segments);
