@@ -30,7 +30,6 @@ int main(int argc, char ** argv) {
     std::string audio_file = "";
     std::string output_file = "";
     std::string model_path = "/home/daniel/archivos/ggml-silero-v6.2.0.bin";
-    int n_threads = 1;
     bool trim_start_requested = false;
     bool trim_end_requested = false;
     bool output_specified = false;
@@ -44,13 +43,6 @@ int main(int argc, char ** argv) {
             trim_start_requested = true;
         } else if (arg == "--trim-end" || arg == "-e") {
             trim_end_requested = true;
-        } else if (arg == "--threads" || arg == "-t") {
-            if (i + 1 < argc) {
-                n_threads = std::stoi(argv[++i]);
-            } else {
-                fprintf(stderr, "Error: --threads requires an argument\n");
-                return 1;
-            }
         } else if (arg == "--replace" || arg == "-i") {
             output_specified = false;
         } else if (arg == "--model" && i + 1 < argc) {
@@ -74,7 +66,6 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  --output <file>    Output file path (default: overwrites input file)\n");
         fprintf(stderr, "  --trim-start, -s   Trim only the silence at the beginning\n");
         fprintf(stderr, "  --trim-end, -e     Trim only the silence at the end\n");
-        fprintf(stderr, "  --threads, -t <n>  Number of threads to use (default: %d)\n", n_threads);
         fprintf(stderr, "  --model <file>     Path to Silero VAD model\n");
         return 1;
     }
@@ -109,7 +100,6 @@ int main(int argc, char ** argv) {
 
     // Initialize VAD context
     struct whisper_vad_context_params vparams = whisper_vad_default_context_params();
-    vparams.n_threads = n_threads;
     
     struct whisper_vad_context * vctx = whisper_vad_init_from_file_with_params(model_path.c_str(), vparams);
     if (vctx == nullptr) {
