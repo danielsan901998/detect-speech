@@ -11,7 +11,6 @@ extern "C" {
 #include <cstdlib>
 #include <unistd.h>
 #include <algorithm>
-#include <thread>
 
 void whisper_log_callback(ggml_log_level level, const char * text, void * user_data) {
     (void)user_data;

@@ -36,7 +36,7 @@
 
 #ifdef WHISPER_FFMPEG
 // as implemented in ffmpeg_trancode.cpp only embedded in common lib if whisper built with ffmpeg support
-extern bool ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t> & wav_data);
+extern int ffmpeg_decode_audio(const std::string & ifname, std::vector<uint8_t> & wav_data);
 #endif
 
 bool read_audio_data(const std::string & fname, std::vector<float>& pcmf32, std::vector<std::vector<float>>& pcmf32s, bool stereo) {
