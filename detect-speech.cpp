@@ -119,41 +119,62 @@ int main(int argc, char ** argv) {
 
     // Detect speech segments
     struct whisper_vad_params vad_params = whisper_vad_default_params();
-    struct whisper_vad_segments * segments = whisper_vad_segments_from_samples(vctx, vad_params, pcmf32.data(), pcmf32.size());
-    if (segments == nullptr) {
-        fprintf(stderr, "Error: Failed to detect speech segments.\n");
-        whisper_vad_free(vctx);
-        return 1;
-    }
 
-    int n_vad_segments = whisper_vad_segments_n_segments(segments);
-
-    if (n_vad_segments == 0) {
-        fprintf(stderr, "No speech detected. Not creating an output file.\n");
-        whisper_vad_free_segments(segments);
-        whisper_vad_free(vctx);
-        return 0;
-    }
-
+    float total_duration_seconds = (float)pcmf32.size() / (float)WHISPER_SAMPLE_RATE;
     float final_start_seconds = 0.0f;
-    float total_duration_seconds = (float)pcmf32.size() / 16000.0f;
     float final_end_seconds = total_duration_seconds;
+    bool speech_detected = false;
+
+    // Process in 30s chunks to find start and end
+    const int chunk_size_samples = 30 * WHISPER_SAMPLE_RATE;
 
     if (call_trim_start) {
-        // whisper_vad_segments_get_segment_t0 returns time in centiseconds (10ms units)
-        final_start_seconds = whisper_vad_segments_get_segment_t0(segments, 0) * 0.01f;
-        // Subtract 0.5 second to avoid skipping the first word
-        final_start_seconds = std::max(0.0f, final_start_seconds - 0.5f);
+        for (int i = 0; i < (int)pcmf32.size(); i += chunk_size_samples) {
+            int n_samples = std::min(chunk_size_samples, (int)pcmf32.size() - i);
+            struct whisper_vad_segments * segments = whisper_vad_segments_from_samples(vctx, vad_params, pcmf32.data() + i, n_samples);
+            if (segments) {
+                if (whisper_vad_segments_n_segments(segments) > 0) {
+                    final_start_seconds = (float)i / (float)WHISPER_SAMPLE_RATE + whisper_vad_segments_get_segment_t0(segments, 0) * 0.01f;
+                    final_start_seconds = std::max(0.0f, final_start_seconds - 0.5f);
+                    speech_detected = true;
+                    whisper_vad_free_segments(segments);
+                    break;
+                }
+                whisper_vad_free_segments(segments);
+            }
+        }
     }
 
-    if (call_trim_end) {
-        final_end_seconds = whisper_vad_segments_get_segment_t1(segments, n_vad_segments - 1) * 0.01f;
-        // Add 0.5 second to avoid skipping the last word
-        final_end_seconds = std::min(total_duration_seconds, final_end_seconds + 0.5f);
+    if (call_trim_end && (speech_detected || !call_trim_start)) {
+        bool end_found = false;
+        for (int i = (int)pcmf32.size(); i > 0; i -= chunk_size_samples) {
+            int start_sample = std::max(0, i - chunk_size_samples);
+            int n_samples = i - start_sample;
+            struct whisper_vad_segments * segments = whisper_vad_segments_from_samples(vctx, vad_params, pcmf32.data() + start_sample, n_samples);
+            if (segments) {
+                int n_seg = whisper_vad_segments_n_segments(segments);
+                if (n_seg > 0) {
+                    final_end_seconds = (float)start_sample / (float)WHISPER_SAMPLE_RATE + whisper_vad_segments_get_segment_t1(segments, n_seg - 1) * 0.01f;
+                    final_end_seconds = std::min(total_duration_seconds, final_end_seconds + 0.5f);
+                    speech_detected = true;
+                    end_found = true;
+                    whisper_vad_free_segments(segments);
+                    break;
+                }
+                whisper_vad_free_segments(segments);
+            }
+            if (call_trim_start && start_sample <= (int)(final_start_seconds * WHISPER_SAMPLE_RATE)) {
+                break;
+            }
+        }
     }
 
-    whisper_vad_free_segments(segments);
     whisper_vad_free(vctx);
+
+    if (!speech_detected) {
+        fprintf(stderr, "No speech detected. Not creating an output file.\n");
+        return 0;
+    }
 
     if (final_start_seconds <= 0.01f && final_end_seconds >= total_duration_seconds - 0.01f) {
         fprintf(stderr, "No significant silence detected. Not creating an output file.\n");
