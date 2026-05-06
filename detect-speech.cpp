@@ -163,7 +163,7 @@ int main(int argc, char ** argv) {
 
     if (!speech_detected) {
         fprintf(stderr, "No speech detected. Not creating an output file.\n");
-        return 0;
+        return 1;
     }
 
     if (final_start_seconds <= 0.01f && final_end_seconds >= total_duration_seconds - 0.01f) {
@@ -171,7 +171,7 @@ int main(int argc, char ** argv) {
         if (replace_input) {
             remove(output_file.c_str());
         }
-        return 0;
+        return 1;
     }
 
     // FFmpeg command construction
