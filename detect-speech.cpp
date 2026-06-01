@@ -12,6 +12,20 @@ extern "C" {
 #include <unistd.h>
 #include <algorithm>
 
+static std::string escape_shell(const std::string & s) {
+    // Escape single quotes by replacing ' with '\''
+    std::string result = "'";
+    for (char c : s) {
+        if (c == '\'') {
+            result += "\\'\''";
+        } else {
+            result += c;
+        }
+    }
+    result += "'";
+    return result;
+}
+
 void whisper_log_callback(ggml_log_level level, const char * text, void * user_data) {
     (void)user_data;
     static ggml_log_level last_level = GGML_LOG_LEVEL_NONE;
@@ -176,7 +190,7 @@ int main(int argc, char ** argv) {
 
     // FFmpeg command construction
     // We use -ss before -i for faster seeking if it's a long file
-    std::string trim_cmd = "ffmpeg -hide_banner -loglevel error -nostdin -y -ss " + std::to_string(final_start_seconds) + " -i \"" + audio_file + "\"";
+    std::string trim_cmd = "ffmpeg -hide_banner -loglevel error -nostdin -y -ss " + std::to_string(final_start_seconds) + " -i " + escape_shell(audio_file);
     
     if (final_end_seconds < total_duration_seconds) {
         trim_cmd += " -to " + std::to_string(final_end_seconds - final_start_seconds);
@@ -186,7 +200,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Detected speech from %.3f.\n", final_start_seconds);
     }
 
-    trim_cmd += " -c copy \"" + output_file + "\"";
+    trim_cmd += " -c copy " + escape_shell(output_file);
 
     fprintf(stderr, "Trimming audio and saving to %s...\n", output_file.c_str());
     if (system(trim_cmd.c_str()) != 0) {
@@ -198,7 +212,7 @@ int main(int argc, char ** argv) {
     fprintf(stderr, "Successfully created %s.\n", output_file.c_str());
 
     if (replace_input) {
-        std::string mv_cmd = "mv \"" + output_file + "\" \"" + audio_file + "\"";
+        std::string mv_cmd = "mv " + escape_shell(output_file) + " " + escape_shell(audio_file);
         if (system(mv_cmd.c_str()) != 0) {
             fprintf(stderr, "Error: Failed to replace original file %s with %s.\n", audio_file.c_str(), output_file.c_str());
             return 1;
