@@ -28,6 +28,7 @@ find_package(Threads REQUIRED)
 # Sources
 set(SOURCES
     detect-speech.cpp
+    src/command.cpp
     src/common.cpp
     src/common-whisper.cpp
     src/ffmpeg-transcode.cpp
